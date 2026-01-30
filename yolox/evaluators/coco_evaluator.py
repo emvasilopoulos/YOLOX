@@ -7,14 +7,8 @@ from tqdm import tqdm
 
 import torch
 
-from yolox.utils import (
-    gather,
-    is_main_process,
-    postprocess,
-    synchronize,
-    time_synchronized,
-    xyxy2xywh
-)
+from yolox.utils import (gather, is_main_process, postprocess, synchronize,
+                         time_synchronized, xyxy2xywh)
 
 import contextlib
 import io
@@ -30,9 +24,14 @@ class COCOEvaluator:
     and evaluated by COCO API.
     """
 
-    def __init__(
-        self, dataloader, img_size, confthre, nmsthre, num_classes, testdev=False
-    ):
+    def __init__(self,
+                 dataloader,
+                 img_size,
+                 confthre,
+                 nmsthre,
+                 num_classes,
+                 device=torch.device("cuda:0"),
+                 testdev=False):
         """
         Args:
             dataloader (Dataloader): evaluate dataloader.
@@ -48,6 +47,7 @@ class COCOEvaluator:
         self.nmsthre = nmsthre
         self.num_classes = num_classes
         self.testdev = testdev
+        self.device = device
 
     def evaluate(
         self,
@@ -73,8 +73,9 @@ class COCOEvaluator:
             summary (sr): summary info of evaluation.
         """
         # TODO half to amp_test
-        tensor_type = torch.cuda.HalfTensor if half else torch.cuda.FloatTensor
-        model = model.eval()
+        dtype = torch.float16 if half else torch.float32
+
+        model = model.to(self.device).eval()
         if half:
             model = model.half()
         ids = []
@@ -86,6 +87,7 @@ class COCOEvaluator:
         n_samples = len(self.dataloader) - 1
 
         if trt_file is not None:
+            # TODO: probably broken because of dtype
             from torch2trt import TRTModule
 
             model_trt = TRTModule()
@@ -95,11 +97,10 @@ class COCOEvaluator:
             model(x)
             model = model_trt
 
-        for cur_iter, (imgs, _, info_imgs, ids) in enumerate(
-            progress_bar(self.dataloader)
-        ):
+        for cur_iter, (imgs, _, info_imgs,
+                       ids) in enumerate(progress_bar(self.dataloader)):
             with torch.no_grad():
-                imgs = imgs.type(tensor_type)
+                imgs = imgs.to(dtype)
 
                 # skip the the last iters since batchsize might be not enough for batch inference
                 is_time_record = cur_iter < len(self.dataloader) - 1
@@ -114,16 +115,20 @@ class COCOEvaluator:
                     infer_end = time_synchronized()
                     inference_time += infer_end - start
 
-                outputs = postprocess(
-                    outputs, self.num_classes, self.confthre, self.nmsthre
-                )
+                outputs = postprocess(outputs, self.num_classes, self.confthre,
+                                      self.nmsthre)
                 if is_time_record:
                     nms_end = time_synchronized()
                     nms_time += nms_end - infer_end
 
-            data_list.extend(self.convert_to_coco_format(outputs, info_imgs, ids))
+            data_list.extend(
+                self.convert_to_coco_format(outputs, info_imgs, ids))
 
-        statistics = torch.cuda.FloatTensor([inference_time, nms_time, n_samples])
+        statistics = torch.tensor(
+            [inference_time, nms_time, n_samples],
+            device=self.device,
+            dtype=torch.float32,
+        )
         if distributed:
             data_list = gather(data_list, dst=0)
             data_list = list(itertools.chain(*data_list))
@@ -135,9 +140,8 @@ class COCOEvaluator:
 
     def convert_to_coco_format(self, outputs, info_imgs, ids):
         data_list = []
-        for (output, img_h, img_w, img_id) in zip(
-            outputs, info_imgs[0], info_imgs[1], ids
-        ):
+        for (output, img_h, img_w, img_id) in zip(outputs, info_imgs[0],
+                                                  info_imgs[1], ids):
             if output is None:
                 continue
             output = output.cpu()
@@ -145,9 +149,8 @@ class COCOEvaluator:
             bboxes = output[:, 0:4]
 
             # preprocessing: resize
-            scale = min(
-                self.img_size[0] / float(img_h), self.img_size[1] / float(img_w)
-            )
+            scale = min(self.img_size[0] / float(img_h),
+                        self.img_size[1] / float(img_w))
             bboxes /= scale
             bboxes = xyxy2xywh(bboxes)
 
@@ -177,18 +180,16 @@ class COCOEvaluator:
         nms_time = statistics[1].item()
         n_samples = statistics[2].item()
 
-        a_infer_time = 1000 * inference_time / (n_samples * self.dataloader.batch_size)
+        a_infer_time = 1000 * inference_time / (n_samples *
+                                                self.dataloader.batch_size)
         a_nms_time = 1000 * nms_time / (n_samples * self.dataloader.batch_size)
 
-        time_info = ", ".join(
-            [
-                "Average {} time: {:.2f} ms".format(k, v)
-                for k, v in zip(
-                    ["forward", "NMS", "inference"],
-                    [a_infer_time, a_nms_time, (a_infer_time + a_nms_time)],
-                )
-            ]
-        )
+        time_info = ", ".join([
+            "Average {} time: {:.2f} ms".format(k, v) for k, v in zip(
+                ["forward", "NMS", "inference"],
+                [a_infer_time, a_nms_time, (a_infer_time + a_nms_time)],
+            )
+        ])
 
         info = time_info + "\n"
 
