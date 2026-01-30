@@ -10,7 +10,6 @@ import os
 import random
 
 from .base_exp import BaseExp
-
 """
 yolox_l:
 - depth: 1.0
@@ -33,22 +32,24 @@ yolox_x:
 - width: 1.25
 """
 
+
 class ExpV2(BaseExp):
+
     def __init__(self, input_size=(640, 640)):
         super().__init__()
 
         # ---------------- model config ---------------- #
-        self.num_classes = 80
+        self.num_classes = 80  # COCO dataset
         self.depth = 1.00
         self.width = 1.00
 
         # ---------------- dataloader config ---------------- #
         # set worker to 4 for shorter dataloader init time
-        self.data_num_workers = 4
+        self.data_num_workers = 0
         self.input_size = input_size
         self.random_size = (14, 26)
-        self.train_ann = "instances_train2017.json"
-        self.val_ann = "instances_val2017.json"
+        self.train_ann = "instances_train_sama_2017.json"
+        self.val_ann = "instances_val_sama_2017.json"
 
         # --------------- transform config ----------------- #
         self.degrees = 10.0
@@ -60,8 +61,8 @@ class ExpV2(BaseExp):
         self.enable_mixup = True
 
         # --------------  training config --------------------- #
-        self.warmup_epochs = 5
-        self.max_epoch = 300
+        self.warmup_epochs = 1
+        self.max_epoch = 10
         self.warmup_lr = 0
         self.basic_lr_per_img = 0.01 / 64.0
         self.scheduler = "yoloxwarmcos"
@@ -73,7 +74,8 @@ class ExpV2(BaseExp):
         self.momentum = 0.9
         self.print_interval = 10
         self.eval_interval = 10
-        self.exp_name = os.path.split(os.path.realpath(__file__))[1].split(".")[0]
+        self.exp_name = os.path.split(
+            os.path.realpath(__file__))[1].split(".")[0]
 
         # -----------------  testing config ------------------ #
         self.test_size = input_size
@@ -91,8 +93,12 @@ class ExpV2(BaseExp):
 
         if getattr(self, "model", None) is None:
             in_channels = [256, 512, 1024]
-            backbone = YOLOPAFPN(self.depth, self.width, in_channels=in_channels)
-            head = YOLOXHead(self.num_classes, self.width, in_channels=in_channels)
+            backbone = YOLOPAFPN(self.depth,
+                                 self.width,
+                                 in_channels=in_channels)
+            head = YOLOXHead(self.num_classes,
+                             self.width,
+                             in_channels=in_channels)
             self.model = YOLOX(backbone, head)
 
         self.model.apply(init_yolo)
@@ -100,18 +106,13 @@ class ExpV2(BaseExp):
         return self.model
 
     def get_data_loader(self, batch_size, is_distributed, no_aug=False):
-        from yolox.data import (
-            COCODataset,
-            DataLoader,
-            InfiniteSampler,
-            MosaicDetection,
-            TrainTransform,
-            YoloBatchSampler
-        )
+        from yolox.data import (COCODataset, DataLoader, InfiniteSampler,
+                                MosaicDetection, TrainTransform,
+                                YoloBatchSampler)
 
         dataset = COCODataset(
-            data_dir=None,
-            json_file=self.train_ann,
+            data_dir="/home/YOLOX/datasets/datasets/coco",
+            json_file="instances_train2017.json",
             img_size=self.input_size,
             preproc=TrainTransform(
                 rgb_means=(0.485, 0.456, 0.406),
@@ -142,7 +143,8 @@ class ExpV2(BaseExp):
         if is_distributed:
             batch_size = batch_size // dist.get_world_size()
 
-        sampler = InfiniteSampler(len(self.dataset), seed=self.seed if self.seed else 0)
+        sampler = InfiniteSampler(len(self.dataset),
+                                  seed=self.seed if self.seed else 0)
 
         batch_sampler = YoloBatchSampler(
             sampler=sampler,
@@ -152,7 +154,10 @@ class ExpV2(BaseExp):
             mosaic=not no_aug,
         )
 
-        dataloader_kwargs = {"num_workers": self.data_num_workers, "pin_memory": True}
+        dataloader_kwargs = {
+            "num_workers": self.data_num_workers,
+            "pin_memory": False
+        }
         dataloader_kwargs["batch_sampler"] = batch_sampler
         train_loader = DataLoader(self.dataset, **dataloader_kwargs)
 
@@ -172,9 +177,9 @@ class ExpV2(BaseExp):
             dist.barrier()
             dist.broadcast(tensor, 0)
 
-        input_size = data_loader.change_input_dim(
-            multiple=(tensor[0].item(), tensor[1].item()), random_range=None
-        )
+        input_size = data_loader.change_input_dim(multiple=(tensor[0].item(),
+                                                            tensor[1].item()),
+                                                  random_range=None)
         return input_size
 
     def get_optimizer(self, batch_size):
@@ -191,15 +196,18 @@ class ExpV2(BaseExp):
                     pg2.append(v.bias)  # biases
                 if isinstance(v, nn.BatchNorm2d) or "bn" in k:
                     pg0.append(v.weight)  # no decay
-                elif hasattr(v, "weight") and isinstance(v.weight, nn.Parameter):
+                elif hasattr(v, "weight") and isinstance(
+                        v.weight, nn.Parameter):
                     pg1.append(v.weight)  # apply decay
 
-            optimizer = torch.optim.SGD(
-                pg0, lr=lr, momentum=self.momentum, nesterov=True
-            )
-            optimizer.add_param_group(
-                {"params": pg1, "weight_decay": self.weight_decay}
-            )  # add pg1 with weight_decay
+            optimizer = torch.optim.SGD(pg0,
+                                        lr=lr,
+                                        momentum=self.momentum,
+                                        nesterov=True)
+            optimizer.add_param_group({
+                "params": pg1,
+                "weight_decay": self.weight_decay
+            })  # add pg1 with weight_decay
             optimizer.add_param_group({"params": pg2})
             self.optimizer = optimizer
 
@@ -224,20 +232,19 @@ class ExpV2(BaseExp):
         from yolox.data import COCODataset, ValTransform
 
         valdataset = COCODataset(
-            data_dir=None,
-            json_file=self.val_ann if not testdev else "image_info_test-dev2017.json",
+            data_dir="/home/YOLOX/datasets/datasets/coco",
+            json_file="instances_val2017.json"
+            if not testdev else "image_info_test-dev2017.json",
             name="val2017" if not testdev else "test2017",
             img_size=self.test_size,
-            preproc=ValTransform(
-                rgb_means=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)
-            ),
+            preproc=ValTransform(rgb_means=(0.485, 0.456, 0.406),
+                                 std=(0.229, 0.224, 0.225)),
         )
 
         if is_distributed:
             batch_size = batch_size // dist.get_world_size()
             sampler = torch.utils.data.distributed.DistributedSampler(
-                valdataset, shuffle=False
-            )
+                valdataset, shuffle=False)
         else:
             sampler = torch.utils.data.SequentialSampler(valdataset)
 
@@ -247,14 +254,17 @@ class ExpV2(BaseExp):
             "sampler": sampler,
         }
         dataloader_kwargs["batch_size"] = batch_size
-        val_loader = torch.utils.data.DataLoader(valdataset, **dataloader_kwargs)
+        val_loader = torch.utils.data.DataLoader(valdataset,
+                                                 **dataloader_kwargs)
 
         return val_loader
 
     def get_evaluator(self, batch_size, is_distributed, testdev=False):
         from yolox.evaluators import COCOEvaluator
 
-        val_loader = self.get_eval_loader(batch_size, is_distributed, testdev=testdev)
+        val_loader = self.get_eval_loader(batch_size,
+                                          is_distributed,
+                                          testdev=testdev)
         evaluator = COCOEvaluator(
             dataloader=val_loader,
             img_size=self.test_size,
