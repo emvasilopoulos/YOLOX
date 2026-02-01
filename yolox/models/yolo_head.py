@@ -14,6 +14,16 @@ import math
 
 from .losses import IOUloss
 from .network_blocks import BaseConv, DWConv
+"""
+From 'torch.functional.py' docs:
+...
+If "ij" is selected, the dimensions are in the same
+order as the cardinality of the inputs.
+If "xy" is selected, the first two dimensions are swapped.
+Currently default is "ij" to match numpy's default behavior.
+but in the future the default will be changed to "xy".
+"""
+MESHGRID_INDEXING = "ij"
 
 
 class YOLOXHead(nn.Module):
@@ -208,7 +218,9 @@ class YOLOXHead(nn.Module):
         n_ch = 5 + self.num_classes
         hsize, wsize = output.shape[-2:]
         if grid.shape[2:4] != output.shape[2:4]:
-            yv, xv = torch.meshgrid([torch.arange(hsize), torch.arange(wsize)])
+            yv, xv = torch.meshgrid(
+                [torch.arange(hsize), torch.arange(wsize)],
+                indexing=MESHGRID_INDEXING)
             grid = torch.stack((xv, yv), 2).view(1, 1, hsize, wsize,
                                                  2).type(dtype)
             self.grids[k] = grid
@@ -226,7 +238,9 @@ class YOLOXHead(nn.Module):
         grids = []
         strides = []
         for (hsize, wsize), stride in zip(self.hw, self.strides):
-            yv, xv = torch.meshgrid([torch.arange(hsize), torch.arange(wsize)])
+            yv, xv = torch.meshgrid(
+                [torch.arange(hsize), torch.arange(wsize)],
+                indexing=MESHGRID_INDEXING)
             grid = torch.stack((xv, yv), 2).view(1, -1, 2)
             grids.append(grid)
             shape = grid.shape[:2]
