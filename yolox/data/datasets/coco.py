@@ -3,6 +3,7 @@
 # Copyright (c) Megvii, Inc. and its affiliates.
 
 import cv2
+from loguru import logger
 import numpy as np
 from pycocotools.coco import COCO
 
@@ -18,12 +19,12 @@ class COCODataset(Dataset):
     """
 
     def __init__(
-        self,
-        data_dir=None,
-        json_file="instances_train2017.json",
-        name="train2017",
-        img_size=(416, 416),
-        preproc=None,
+            self,
+            data_dir=None,
+            json_file="instances_train2017.json",
+            name="train2017",
+            img_size=(416, 416),
+            preproc=None,
     ):
         """
         COCO dataset initialization. Annotation data are read into memory by COCO API.
@@ -40,7 +41,11 @@ class COCODataset(Dataset):
         self.data_dir = data_dir
         self.json_file = json_file
 
-        self.coco = COCO(os.path.join(self.data_dir, "annotations", self.json_file))
+        annotations_path = os.path.join(self.data_dir, "annotations",
+                                        self.json_file)
+        logger.info(f"annotations path: {annotations_path}")
+        self.coco = COCO(annotations_path)
+        logger.info("Done...")
         self.ids = self.coco.getImgIds()
         self.class_ids = sorted(self.coco.getCatIds())
         cats = self.coco.loadCats(self.coco.getCatIds())
@@ -83,7 +88,9 @@ class COCODataset(Dataset):
 
         img_info = (height, width)
 
-        file_name = im_ann["file_name"] if "file_name" in im_ann else "{:012}".format(id_) + ".jpg"
+        file_name = im_ann[
+            "file_name"] if "file_name" in im_ann else "{:012}".format(
+                id_) + ".jpg"
 
         del im_ann, annotations
 
@@ -97,9 +104,7 @@ class COCODataset(Dataset):
 
         res, img_info, file_name = self.annotations[index]
         # load image and preprocess
-        img_file = os.path.join(
-            self.data_dir, self.name, file_name
-        )
+        img_file = os.path.join(self.data_dir, self.name, file_name)
 
         img = cv2.imread(img_file)
         assert img is not None

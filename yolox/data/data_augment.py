@@ -30,9 +30,8 @@ def augment_hsv(img, hgain=0.015, sgain=0.7, vgain=0.4):
     lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
     lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
 
-    img_hsv = cv2.merge(
-        (cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val))
-    ).astype(dtype)
+    img_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat),
+                         cv2.LUT(val, lut_val))).astype(dtype)
     cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR, dst=img)  # no return needed
 
 
@@ -43,23 +42,21 @@ def box_candidates(box1, box2, wh_thr=2, ar_thr=20, area_thr=0.2):
     w1, h1 = box1[2] - box1[0], box1[3] - box1[1]
     w2, h2 = box2[2] - box2[0], box2[3] - box2[1]
     ar = np.maximum(w2 / (h2 + 1e-16), h2 / (w2 + 1e-16))  # aspect ratio
-    return (
-        (w2 > wh_thr)
-        & (h2 > wh_thr)
-        & (w2 * h2 / (w1 * h1 + 1e-16) > area_thr)
-        & (ar < ar_thr)
-    )  # candidates
+    return ((w2 > wh_thr)
+            & (h2 > wh_thr)
+            & (w2 * h2 / (w1 * h1 + 1e-16) > area_thr)
+            & (ar < ar_thr))  # candidates
 
 
 def random_perspective(
-    img,
-    targets=(),
-    degrees=10,
-    translate=0.1,
-    scale=0.1,
-    shear=10,
-    perspective=0.0,
-    border=(0, 0),
+        img,
+        targets=(),
+        degrees=10,
+        translate=0.1,
+        scale=0.1,
+        shear=10,
+        perspective=0.0,
+        border=(0, 0),
 ):
     # targets = [cls, xyxy]
     height = img.shape[0] + border[0] * 2  # shape(h,w,c)
@@ -72,25 +69,27 @@ def random_perspective(
 
     # Rotation and Scale
     R = np.eye(3)
-    a = random.uniform(-degrees, degrees)
+    random_angle = random.uniform(-degrees, degrees)
     # a += random.choice([-180, -90, 0, 90])  # add 90deg rotations to small rotations
-    s = random.uniform(scale[0], scale[1])
+    random_scale = random.uniform(scale[0], scale[1])
     # s = 2 ** random.uniform(-scale, scale)
-    R[:2] = cv2.getRotationMatrix2D(angle=a, center=(0, 0), scale=s)
+    R[:2] = cv2.getRotationMatrix2D(angle=random_angle,
+                                    center=(0, 0),
+                                    scale=random_scale)
 
     # Shear
     S = np.eye(3)
-    S[0, 1] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # x shear (deg)
-    S[1, 0] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # y shear (deg)
+    S[0, 1] = math.tan(random.uniform(-shear, shear) * math.pi /
+                       180)  # x shear (deg)
+    S[1, 0] = math.tan(random.uniform(-shear, shear) * math.pi /
+                       180)  # y shear (deg)
 
     # Translation
     T = np.eye(3)
-    T[0, 2] = (
-        random.uniform(0.5 - translate, 0.5 + translate) * width
-    )  # x translation (pixels)
-    T[1, 2] = (
-        random.uniform(0.5 - translate, 0.5 + translate) * height
-    )  # y translation (pixels)
+    T[0, 2] = (random.uniform(0.5 - translate, 0.5 + translate) * width
+               )  # x translation (pixels)
+    T[1, 2] = (random.uniform(0.5 - translate, 0.5 + translate) * height
+               )  # y translation (pixels)
 
     # Combined rotation matrix
     M = T @ S @ R @ C  # order of operations (right to left) is IMPORTANT
@@ -101,15 +100,18 @@ def random_perspective(
     # M = np.eye(3)
     ###########################
 
-    if (border[0] != 0) or (border[1] != 0) or (M != np.eye(3)).any():  # image changed
+    if (border[0] != 0) or (border[1]
+                            != 0) or (M != np.eye(3)).any():  # image changed
         if perspective:
-            img = cv2.warpPerspective(
-                img, M, dsize=(width, height), borderValue=(114, 114, 114)
-            )
+            img = cv2.warpPerspective(img,
+                                      M,
+                                      dsize=(width, height),
+                                      borderValue=(114, 114, 114))
         else:  # affine
-            img = cv2.warpAffine(
-                img, M[:2], dsize=(width, height), borderValue=(114, 114, 114)
-            )
+            img = cv2.warpAffine(img,
+                                 M[:2],
+                                 dsize=(width, height),
+                                 borderValue=(114, 114, 114))
 
     # Transform label coordinates
     n = len(targets)
@@ -117,8 +119,7 @@ def random_perspective(
         # warp points
         xy = np.ones((n * 4, 3))
         xy[:, :2] = targets[:, [0, 1, 2, 3, 0, 3, 2, 1]].reshape(
-            n * 4, 2
-        )  # x1y1, x2y2, x1y2, x2y1
+            n * 4, 2)  # x1y1, x2y2, x1y2, x2y1
         xy = xy @ M.T  # transform
         if perspective:
             xy = (xy[:, :2] / xy[:, 2:3]).reshape(n, 8)  # rescale
@@ -128,14 +129,15 @@ def random_perspective(
         # create new boxes
         x = xy[:, [0, 2, 4, 6]]
         y = xy[:, [1, 3, 5, 7]]
-        xy = np.concatenate((x.min(1), y.min(1), x.max(1), y.max(1))).reshape(4, n).T
+        xy = np.concatenate(
+            (x.min(1), y.min(1), x.max(1), y.max(1))).reshape(4, n).T
 
         # clip boxes
         xy[:, [0, 2]] = xy[:, [0, 2]].clip(0, width)
         xy[:, [1, 3]] = xy[:, [1, 3]].clip(0, height)
 
         # filter candidates
-        i = box_candidates(box1=targets[:, :4].T * s, box2=xy.T)
+        i = box_candidates(box1=targets[:, :4].T * random_scale, box2=xy.T)
         targets = targets[i]
         targets[:, :4] = xy[i]
 
@@ -143,6 +145,7 @@ def random_perspective(
 
 
 def _distort(image):
+
     def _convert(image, alpha=1, beta=0):
         tmp = image.astype(float) * alpha + beta
         tmp[tmp < 0] = 0
@@ -193,7 +196,7 @@ def preproc(image, input_size, mean, std, swap=(2, 0, 1)):
         (int(img.shape[1] * r), int(img.shape[0] * r)),
         interpolation=cv2.INTER_LINEAR,
     ).astype(np.float32)
-    padded_img[: int(img.shape[0] * r), : int(img.shape[1] * r)] = resized_img
+    padded_img[:int(img.shape[0] * r), :int(img.shape[1] * r)] = resized_img
 
     padded_img = padded_img[:, :, ::-1]
     padded_img /= 255.0
@@ -207,6 +210,7 @@ def preproc(image, input_size, mean, std, swap=(2, 0, 1)):
 
 
 class TrainTransform:
+
     def __init__(self, p=0.5, rgb_means=None, std=None, max_labels=50):
         self.means = rgb_means
         self.std = std
@@ -252,9 +256,8 @@ class TrainTransform:
 
         targets_t = np.hstack((labels_t, boxes_t))
         padded_labels = np.zeros((self.max_labels, 5))
-        padded_labels[range(len(targets_t))[: self.max_labels]] = targets_t[
-            : self.max_labels
-        ]
+        padded_labels[range(
+            len(targets_t))[:self.max_labels]] = targets_t[:self.max_labels]
         padded_labels = np.ascontiguousarray(padded_labels, dtype=np.float32)
         image_t = np.ascontiguousarray(image_t, dtype=np.float32)
         return image_t, padded_labels

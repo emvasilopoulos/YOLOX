@@ -7,10 +7,8 @@ from loguru import logger
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from yolox.data import DataPrefetcher
-from yolox.utils import (MeterBuffer, ModelEMA, all_reduce_norm,
-                         get_model_info, get_rank, get_world_size,
-                         gpu_mem_usage, load_ckpt, occupy_mem, save_checkpoint,
+from yolox.utils import (MeterBuffer, ModelEMA, all_reduce_norm, get_rank,
+                         gpu_mem_usage, load_ckpt, save_checkpoint,
                          setup_logger, synchronize)
 
 import datetime
@@ -68,6 +66,7 @@ class TrainerV2:
             self.after_epoch()
 
     def train_in_iter(self):
+        self.train_iter = iter(self.train_loader)
         for self.iter in range(self.max_iter):
             self.before_iter()
             self.train_one_iter()
@@ -76,7 +75,7 @@ class TrainerV2:
     def train_one_iter(self):
         iter_start_time = time.time()
 
-        inps, targets, _, _ = next(iter(self.train_loader))
+        inps, targets, _, _ = next(self.train_iter)
         inps = inps.to(self.device, dtype=self.data_type)
         targets = targets.to(self.device)
         data_end_time = time.time()
@@ -151,7 +150,7 @@ class TrainerV2:
         self.model.train()
 
         self.evaluator = self.exp.get_evaluator(
-            batch_size=self.args.batch_size, is_distributed=False)
+            batch_size=self.args.batch_size)
 
         self.tblogger = SummaryWriter(self.file_name)
 
@@ -228,10 +227,7 @@ class TrainerV2:
         # random resizing
         if self.exp.random_size is not None and (self.progress_in_iter +
                                                  1) % 10 == 0:
-            is_distributed = False
-            self.input_size = self.exp.random_resize(self.train_loader,
-                                                     self.epoch, self.rank,
-                                                     is_distributed)
+            self.input_size = self.exp.random_resize(self.train_loader)
 
     @property
     def progress_in_iter(self):
@@ -270,10 +266,8 @@ class TrainerV2:
         return model
 
     def evaluate_and_save_model(self):
-        is_distributed = False
         evalmodel = self.ema_model.ema if self.use_model_ema else self.model
-        ap50_95, ap50, summary = self.exp.eval(evalmodel, self.evaluator,
-                                               is_distributed)
+        ap50_95, ap50, summary = self.exp.eval(evalmodel, self.evaluator)
         self.model.train()
         if self.rank == 0:
             self.tblogger.add_scalar("val/COCOAP50", ap50, self.epoch + 1)

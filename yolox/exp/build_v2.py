@@ -7,20 +7,27 @@ import os
 import sys
 
 
-def get_exp_by_file_v2(exp_file, input_width=640, input_height=640):
+def get_exp_by_file_v2(exp_file,
+                       input_width=640,
+                       input_height=640,
+                       batch_size=16):
     try:
         sys.path.append(os.path.dirname(exp_file))
         module_path = os.path.basename(exp_file)
         current_exp = importlib.import_module(module_path.split(".")[0])
         exp = current_exp.Exp(input_width=input_width,
-                              input_height=input_height)
+                              input_height=input_height,
+                              batch_size=batch_size)
     except Exception:
         raise ImportError(
             "{} doesn't contains class named 'Exp'".format(exp_file))
     return exp
 
 
-def get_exp_by_name_v2(exp_name, input_width=640, input_height=640):
+def get_exp_by_name_v2(exp_name,
+                       input_width=640,
+                       input_height=640,
+                       batch_size=16):
     import yolox
 
     yolox_path = os.path.dirname(os.path.dirname(yolox.__file__))
@@ -35,10 +42,15 @@ def get_exp_by_name_v2(exp_name, input_width=640, input_height=640):
     exp_path = os.path.join(yolox_path, "exps", "default", filename)
     return get_exp_by_file_v2(exp_path,
                               input_width=input_width,
-                              input_height=input_height)
+                              input_height=input_height,
+                              batch_size=batch_size)
 
 
-def get_exp_v2(exp_file, exp_name, input_width=640, input_height=640):
+def get_exp_v2(exp_file,
+               exp_name,
+               input_width=640,
+               input_height=640,
+               batch_size=16):
     """
     get Exp object by file or name. If exp_file and exp_name
     are both provided, get Exp by exp_file.
@@ -52,8 +64,10 @@ def get_exp_v2(exp_file, exp_name, input_width=640, input_height=640):
     if exp_file is not None:
         return get_exp_by_file_v2(exp_file,
                                   input_width=input_width,
-                                  input_height=input_height)
+                                  input_height=input_height,
+                                  batch_size=batch_size)
     else:
         return get_exp_by_name_v2(exp_name,
                                   input_width=input_width,
-                                  input_height=input_height)
+                                  input_height=input_height,
+                                  batch_size=batch_size)

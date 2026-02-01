@@ -3,5 +3,5 @@
 # Copyright (c) Megvii, Inc. and its affiliates.
 
 from .launch import launch
-from .trainer import Trainer
+# from .trainer import Trainer
 from .trainer_v2 import TrainerV2

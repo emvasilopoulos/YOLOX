@@ -2,6 +2,7 @@
 # -*- coding:utf-8 -*-
 # Copyright (c) 2014-2021 Megvii Inc. All rights reserved.
 
+from typing import Tuple
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -32,11 +33,31 @@ yolox_x:
 - width: 1.25
 """
 
+COCO_DATASET_DIR = "/home/YOLOX/datasets/datasets/coco"
+RGB_MEANS = (0.485, 0.456, 0.406)
+STD = (0.229, 0.224, 0.225)
+
+
+def get_random_resize_limits(input_size: Tuple[int, int]) -> Tuple[int, int]:
+    min_size = min(input_size) * 0.75
+    max_size = max(input_size) * 1.1
+    min_limit = int(min_size / 32)
+    max_limit = int(max_size / 32)
+    return min_limit, max_limit
+
+
+def _check_input_size(input_size: Tuple[int, int]):
+    assert isinstance(input_size, tuple)
+    assert len(input_size) == 2
+    assert input_size[0] % 32 == 0, "input_size[0] must be multiple of 32"
+    assert input_size[1] % 32 == 0, "input_size[1] must be multiple of 32"
+
 
 class ExpV2(BaseExp):
 
-    def __init__(self, input_size=(640, 640)):
+    def __init__(self, input_size=(640, 640), batch_size=16):
         super().__init__()
+        _check_input_size(input_size)
 
         # ---------------- model config ---------------- #
         self.num_classes = 80  # COCO dataset
@@ -47,38 +68,39 @@ class ExpV2(BaseExp):
         # set worker to 4 for shorter dataloader init time
         self.data_num_workers = 0
         self.input_size = input_size
-        self.random_size = (14, 26)
-        self.train_ann = "instances_train_sama_2017.json"
-        self.val_ann = "instances_val_sama_2017.json"
+        self.random_size = get_random_resize_limits(input_size)
+        self.train_annotations_file = "sama_instances_train2017.json"
+        self.val_annotations_file = "sama_instances_val2017.json"
 
-        # --------------- transform config ----------------- #
+        # --------------- transform config - Mosaic Config ----------------- #
         self.degrees = 10.0
         self.translate = 0.1
-        self.scale = (0.1, 2)
-        self.mscale = (0.8, 1.6)
-        self.shear = 2.0
+        self.scale = (0.7, 1.2)
+        self.mscale = (0.6, 1.1)
+        self.shear = 0  # no shear
         self.perspective = 0.0
         self.enable_mixup = True
 
         # --------------  training config --------------------- #
-        self.warmup_epochs = 1
+        self.warmup_epochs = 2
         self.max_epoch = 10
-        self.warmup_lr = 0
+        self.warmup_lr_start = 0
+        self.batch_size = batch_size
         self.basic_lr_per_img = 0.01 / 64.0
         self.scheduler = "yoloxwarmcos"
-        self.no_aug_epochs = 15
+        self.no_aug_epochs = 2
         self.min_lr_ratio = 0.05
         self.ema = True
 
-        self.weight_decay = 5e-4
+        self.weight_decay = 4e-4
         self.momentum = 0.9
-        self.print_interval = 10
+        self.print_interval = 5
         self.eval_interval = 10
         self.exp_name = os.path.split(
             os.path.realpath(__file__))[1].split(".")[0]
 
         # -----------------  testing config ------------------ #
-        self.test_size = input_size
+        self.test_size_coco = (640, 640)
         self.test_conf = 0.01
         self.nmsthre = 0.65
 
@@ -111,12 +133,12 @@ class ExpV2(BaseExp):
                                 YoloBatchSampler)
 
         dataset = COCODataset(
-            data_dir="/home/YOLOX/datasets/datasets/coco",
-            json_file="instances_train2017.json",
+            data_dir=COCO_DATASET_DIR,
+            json_file=self.train_annotations_file,
             img_size=self.input_size,
             preproc=TrainTransform(
-                rgb_means=(0.485, 0.456, 0.406),
-                std=(0.229, 0.224, 0.225),
+                rgb_means=RGB_MEANS,
+                std=STD,
                 max_labels=50,
             ),
         )
@@ -126,8 +148,8 @@ class ExpV2(BaseExp):
             mosaic=not no_aug,
             img_size=self.input_size,
             preproc=TrainTransform(
-                rgb_means=(0.485, 0.456, 0.406),
-                std=(0.229, 0.224, 0.225),
+                rgb_means=RGB_MEANS,
+                std=STD,
                 max_labels=120,
             ),
             degrees=self.degrees,
@@ -163,19 +185,14 @@ class ExpV2(BaseExp):
 
         return train_loader
 
-    def random_resize(self, data_loader, epoch, rank, is_distributed):
+    def random_resize(self, data_loader):
         tensor = torch.LongTensor(2).cuda()
 
-        if rank == 0:
-            size_factor = self.input_size[1] * 1.0 / self.input_size[0]
-            size = random.randint(*self.random_size)
-            size = (int(32 * size), 32 * int(size * size_factor))
-            tensor[0] = size[0]
-            tensor[1] = size[1]
-
-        if is_distributed:
-            dist.barrier()
-            dist.broadcast(tensor, 0)
+        size_factor = self.input_size[1] * 1.0 / self.input_size[0]
+        size = random.randint(*self.random_size)
+        size = (int(32 * size), 32 * int(size * size_factor))
+        tensor[0] = size[0]
+        tensor[1] = size[1]
 
         input_size = data_loader.change_input_dim(multiple=(tensor[0].item(),
                                                             tensor[1].item()),
@@ -185,7 +202,7 @@ class ExpV2(BaseExp):
     def get_optimizer(self, batch_size):
         if "optimizer" not in self.__dict__:
             if self.warmup_epochs > 0:
-                lr = self.warmup_lr
+                lr = self.warmup_lr_start
             else:
                 lr = self.basic_lr_per_img * batch_size
 
@@ -222,31 +239,24 @@ class ExpV2(BaseExp):
             iters_per_epoch,
             self.max_epoch,
             warmup_epochs=self.warmup_epochs,
-            warmup_lr_start=self.warmup_lr,
+            warmup_lr_start=self.warmup_lr_start,
             no_aug_epochs=self.no_aug_epochs,
             min_lr_ratio=self.min_lr_ratio,
         )
         return scheduler
 
-    def get_eval_loader(self, batch_size, is_distributed, testdev=False):
+    def get_eval_loader(self, batch_size, testdev=False):
         from yolox.data import COCODataset, ValTransform
 
         valdataset = COCODataset(
-            data_dir="/home/YOLOX/datasets/datasets/coco",
-            json_file="instances_val2017.json"
-            if not testdev else "image_info_test-dev2017.json",
-            name="val2017" if not testdev else "test2017",
-            img_size=self.test_size,
-            preproc=ValTransform(rgb_means=(0.485, 0.456, 0.406),
-                                 std=(0.229, 0.224, 0.225)),
+            data_dir=COCO_DATASET_DIR,
+            json_file=self.val_annotations_file,
+            name="val2017",
+            img_size=self.test_size_coco,
+            preproc=ValTransform(rgb_means=RGB_MEANS, std=STD),
         )
 
-        if is_distributed:
-            batch_size = batch_size // dist.get_world_size()
-            sampler = torch.utils.data.distributed.DistributedSampler(
-                valdataset, shuffle=False)
-        else:
-            sampler = torch.utils.data.SequentialSampler(valdataset)
+        sampler = torch.utils.data.SequentialSampler(valdataset)
 
         dataloader_kwargs = {
             "num_workers": self.data_num_workers,
@@ -259,15 +269,13 @@ class ExpV2(BaseExp):
 
         return val_loader
 
-    def get_evaluator(self, batch_size, is_distributed, testdev=False):
-        from yolox.evaluators import COCOEvaluator
+    def get_evaluator(self, batch_size, testdev=False):
+        from yolox.evaluators import COCOEvaluatorV2
 
-        val_loader = self.get_eval_loader(batch_size,
-                                          is_distributed,
-                                          testdev=testdev)
-        evaluator = COCOEvaluator(
+        val_loader = self.get_eval_loader(batch_size, testdev=testdev)
+        evaluator = COCOEvaluatorV2(
             dataloader=val_loader,
-            img_size=self.test_size,
+            img_size=self.test_size_coco,
             confthre=self.test_conf,
             nmsthre=self.nmsthre,
             num_classes=self.num_classes,
@@ -275,5 +283,5 @@ class ExpV2(BaseExp):
         )
         return evaluator
 
-    def eval(self, model, evaluator, is_distributed, half=False):
-        return evaluator.evaluate(model, is_distributed, half)
+    def eval(self, model, evaluator, half=False):
+        return evaluator.evaluate(model, half)

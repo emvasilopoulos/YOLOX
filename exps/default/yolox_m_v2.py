@@ -19,8 +19,9 @@ according to yolox/data/datasets/datasets_wrapper.py
 
 class Exp(ExpV2):
 
-    def __init__(self, input_width=640, input_height=640):
-        super(Exp, self).__init__((input_width, input_height))
+    def __init__(self, input_width=640, input_height=640, batch_size=16):
+        super(Exp, self).__init__((input_width, input_height),
+                                  batch_size=batch_size)
         self.depth = 0.67
         self.width = 0.75
         self.exp_name = os.path.split(
