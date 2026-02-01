@@ -32,8 +32,7 @@ class YOLOX(nn.Module):
         if self.training:
             assert targets is not None
             loss, iou_loss, conf_loss, cls_loss, l1_loss, num_fg = self.head(
-                fpn_outs, targets, x
-            )
+                fpn_outs, targets, x)
             outputs = {
                 "total_loss": loss,
                 "iou_loss": iou_loss,
@@ -43,6 +42,11 @@ class YOLOX(nn.Module):
                 "num_fg": num_fg,
             }
         else:
-            outputs = self.head(fpn_outs)
+            outputs = {
+                "predictions": self.head(fpn_outs),
+                "low_res_feats": fpn_outs[0],
+                "mid_res_feats": fpn_outs[1],
+                "high_res_feats": fpn_outs[2],
+            }
 
         return outputs
