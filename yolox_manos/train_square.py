@@ -77,14 +77,36 @@ def make_parser():
         action="store_true",
         help="occupy GPU memory first for training.",
     )
+    parser.add_argument(
+        "--eval",
+        dest="eval",
+        default=False,
+        action="store_true",
+        help="evaluate only",
+    )
 
     return parser
 
 
-def main(exp, args):
+def eval_only(exp, args):
+    trainer = TrainerV2(exp, args)
+    trainer.before_train()
+    evalmodel = trainer.ema_model.ema if trainer.use_model_ema else trainer.model
+    ap50_95, ap50, summary = trainer.exp.eval(evalmodel, trainer.evaluator)
+    print(f"AP50_95: {ap50_95}, AP50: {ap50}")
+    print(summary)
 
+
+def train(exp, args):
     trainer = TrainerV2(exp, args)
     trainer.train()
+
+
+def main(exp, args):
+    if args.eval:
+        eval_only(exp, args)
+    else:
+        train(exp, args)
 
 
 if __name__ == "__main__":
@@ -92,7 +114,8 @@ if __name__ == "__main__":
     exp = get_exp_v2(args.exp_file,
                      args.name,
                      input_width=args.input_width,
-                     input_height=args.input_height)
+                     input_height=args.input_height,
+                     batch_size=args.batch_size)
 
     if not args.experiment_name:
         args.experiment_name = exp.exp_name
