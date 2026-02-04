@@ -34,6 +34,7 @@ yolox_x:
 """
 
 COCO_DATASET_DIR = "/home/YOLOX/datasets/datasets/coco"
+OPENIMAGES_DATASET_DIR = "/home/YOLOX/datasets/OpenImages"
 RGB_MEANS = (0.485, 0.456, 0.406)
 STD = (0.229, 0.224, 0.225)
 
@@ -69,7 +70,7 @@ class ExpV2(BaseExp):
         self.data_num_workers = 0
         self.input_size = input_size
         self.random_size = get_random_resize_limits(input_size)
-        self.train_annotations_file = "sama_instances_train2017.json"
+        self.train_annotations_file = "validation-annotations-bbox-as-COCO.json"
         self.val_annotations_file = "sama_instances_val2017.json"
 
         # --------------- transform config - Mosaic Config ----------------- #
@@ -132,9 +133,11 @@ class ExpV2(BaseExp):
                                 MosaicDetection, TrainTransform,
                                 YoloBatchSampler)
 
+        # We use validation images of OpenImages for training
         dataset = COCODataset(
-            data_dir=COCO_DATASET_DIR,
+            data_dir=OPENIMAGES_DATASET_DIR,
             json_file=self.train_annotations_file,
+            name="validation",
             img_size=self.input_size,
             preproc=TrainTransform(
                 rgb_means=RGB_MEANS,
