@@ -6,6 +6,8 @@ from typing import Tuple
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+import dataclasses
+import enum
 
 import os
 import random
@@ -34,7 +36,41 @@ yolox_x:
 """
 
 COCO_DATASET_DIR = "/home/YOLOX/datasets/datasets/coco"
+COCO_TRAIN_IMAGES_DIR_NAME = "train2017"
+COCO_VAL_IMAGES_DIR_NAME = "val2017"
+COCO_TRAIN_ANNOTATIONS_FILE = "instances_train2017.json"
+COCO_VAL_ANNOTATIONS_FILE = "instances_val2017.json"
+
 OPENIMAGES_DATASET_DIR = "/home/YOLOX/datasets/OpenImages"
+OPENIMAGES_TRAIN_IMAGES_DIR_NAME = "validation"
+OPENIMAGES_TRAIN_ANNOTATIONS_FILE = "validation-annotations-bbox-as-COCO.json"
+
+class TrainDataset(enum.Enum):
+    COCO = 1
+    OPENIMAGES = 2
+
+@dataclasses.dataclass
+class TrainDatasetInfo:
+    dataset_dir: str
+    train_images_dir_name: str
+    train_annotations_file: str
+
+def get_train_dataset_info(train_dataset: TrainDataset) -> Tuple[str, str, str]:
+    if train_dataset == TrainDataset.COCO:
+        return TrainDatasetInfo(
+            dataset_dir=COCO_DATASET_DIR,
+            train_images_dir_name=COCO_TRAIN_IMAGES_DIR_NAME,
+            train_annotations_file=COCO_TRAIN_ANNOTATIONS_FILE,
+        )
+    elif train_dataset == TrainDataset.OPENIMAGES:
+        return TrainDatasetInfo(
+            dataset_dir=OPENIMAGES_DATASET_DIR,
+            train_images_dir_name=OPENIMAGES_TRAIN_IMAGES_DIR_NAME,
+            train_annotations_file=OPENIMAGES_TRAIN_ANNOTATIONS_FILE,
+        )
+    else:
+        raise ValueError(f"Unsupported train dataset: {train_dataset}")
+
 RGB_MEANS = (0.485, 0.456, 0.406)
 STD = (0.229, 0.224, 0.225)
 
@@ -56,7 +92,7 @@ def _check_input_size(input_size: Tuple[int, int]):
 
 class ExpV2(BaseExp):
 
-    def __init__(self, input_size=(640, 640), batch_size=16):
+    def __init__(self, input_size=(640, 640), batch_size=16, train_dataset=TrainDataset.COCO):
         super().__init__()
         _check_input_size(input_size)
 
@@ -70,35 +106,41 @@ class ExpV2(BaseExp):
         self.data_num_workers = 0
         self.input_size = input_size
         self.random_size = get_random_resize_limits(input_size)
-        self.train_annotations_file = "validation-annotations-bbox-as-COCO.json"
-        self.val_annotations_file = "sama_instances_val2017.json"
 
-        # --------------- transform config - Mosaic Config ----------------- #
+        # ---------------- train dataset config ---------------- #
+        train_dataset_info = get_train_dataset_info(train_dataset)
+        self.dataset_dir = train_dataset_info.dataset_dir
+        self.train_images_dir_name = train_dataset_info.train_images_dir_name
+        self.train_annotations_file = train_dataset_info.train_annotations_file
+
+        # ---------------- validation dataset config ---------------- #
+        self.val_annotations_file = COCO_VAL_ANNOTATIONS_FILE # always use COCO val annotations for evaluation, even if training on OpenImages
+        self.val_images_dir_name = COCO_VAL_IMAGES_DIR_NAME 
+
+        # --------------- transform config ----------------- #
         self.degrees = 10.0
         self.translate = 0.1
-        self.scale = (0.7, 1.2)
-        self.mscale = (0.6, 1.1)
-        self.shear = 0  # no shear
+        self.scale = (0.1, 2)
+        self.mscale = (0.8, 1.6)
+        self.shear = 2.0
         self.perspective = 0.0
         self.enable_mixup = True
 
         # --------------  training config --------------------- #
-        self.warmup_epochs = 2
-        self.max_epoch = 10
+        self.warmup_epochs = 5
+        self.max_epoch = 300
         self.warmup_lr_start = 0
-        self.batch_size = batch_size
         self.basic_lr_per_img = 0.01 / 64.0
         self.scheduler = "yoloxwarmcos"
-        self.no_aug_epochs = 2
+        self.no_aug_epochs = 15
         self.min_lr_ratio = 0.05
         self.ema = True
 
-        self.weight_decay = 4e-4
+        self.weight_decay = 5e-4
         self.momentum = 0.9
-        self.print_interval = 5
+        self.print_interval = 10
         self.eval_interval = 10
-        self.exp_name = os.path.split(
-            os.path.realpath(__file__))[1].split(".")[0]
+        self.exp_name = os.path.split(os.path.realpath(__file__))[1].split(".")[0]
 
         # -----------------  testing config ------------------ #
         self.test_size_coco = (640, 640)
@@ -135,9 +177,9 @@ class ExpV2(BaseExp):
 
         # We use validation images of OpenImages for training
         dataset = COCODataset(
-            data_dir=OPENIMAGES_DATASET_DIR,
+            data_dir=COCO_DATASET_DIR,
             json_file=self.train_annotations_file,
-            name="validation",
+            name=self.train_images_dir_name,
             img_size=self.input_size,
             preproc=TrainTransform(
                 rgb_means=RGB_MEANS,
@@ -254,7 +296,7 @@ class ExpV2(BaseExp):
         valdataset = COCODataset(
             data_dir=COCO_DATASET_DIR,
             json_file=self.val_annotations_file,
-            name="val2017",
+            name=self.val_images_dir_name,
             img_size=self.test_size_coco,
             preproc=ValTransform(rgb_means=RGB_MEANS, std=STD),
         )
